@@ -5,17 +5,35 @@
 DISCORD_BIN="/usr/share/discord/Discord"
 DOWNLOAD_URL="https://discord.com/api/download?platform=linux&format=deb"
 TMP_DEB="/tmp/discord-update.deb"
+LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/discord-updater"
+LOG_FILE="$LOG_DIR/update.log"
+LOCK_FILE="/tmp/discord-updater.lock"
+
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
+# Log to both stdout and file (keep last 500 lines)
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "$msg"
+    echo "$msg" >> "$LOG_FILE"
+}
+
+# Rotate log if it gets too large (>100KB)
+if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 102400 ]; then
+    tail -n 200 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
 
 # Get installed version
 get_installed_version() {
     dpkg -s discord 2>/dev/null | grep '^Version:' | awk '{print $2}'
 }
 
-# Get latest version by following the redirect (non-destructive HEAD-like check)
+# Get latest version by following the redirect
 get_latest_version() {
-    # Follow redirects and extract version from the final URL
     local final_url
-    final_url=$(curl -sI -o /dev/null -w '%{url_effective}' -L "$DOWNLOAD_URL" 2>/dev/null)
+    final_url=$(curl -s -o /dev/null -w '%{url_effective}' -L \
+        --connect-timeout 5 --max-time 10 "$DOWNLOAD_URL" 2>/dev/null)
     echo "$final_url" | grep -oP 'discord-\K[0-9]+\.[0-9]+\.[0-9]+'
 }
 
@@ -30,43 +48,58 @@ update_discord() {
     installed=$(get_installed_version)
 
     if [ -z "$installed" ]; then
-        echo "[Discord Updater] Discord is not installed via dpkg. Skipping update check."
+        log "[Discord Updater] Discord is not installed via dpkg. Skipping update check."
         return
     fi
 
-    echo "[Discord Updater] Installed version: $installed"
-    echo "[Discord Updater] Checking for updates..."
+    log "[Discord Updater] Installed version: $installed"
+    log "[Discord Updater] Checking for updates..."
 
     latest=$(get_latest_version)
 
     if [ -z "$latest" ]; then
-        echo "[Discord Updater] Could not determine latest version. Skipping update."
+        log "[Discord Updater] Could not determine latest version. Skipping update."
         return
     fi
 
-    echo "[Discord Updater] Latest version: $latest"
+    log "[Discord Updater] Latest version: $latest"
 
     if version_lt "$installed" "$latest"; then
-        echo "[Discord Updater] Update available! Downloading $latest..."
+        log "[Discord Updater] Update available! Downloading $latest..."
 
-        if curl -L -o "$TMP_DEB" "$DOWNLOAD_URL" 2>/dev/null; then
-            echo "[Discord Updater] Installing update..."
-            if sudo /usr/bin/apt install -y "$TMP_DEB" 2>&1; then
-                echo "[Discord Updater] Successfully updated to $latest!"
+        # Clean up any leftover temp file
+        rm -f "$TMP_DEB"
+
+        if curl -L -o "$TMP_DEB" --connect-timeout 10 --max-time 300 "$DOWNLOAD_URL" 2>/dev/null; then
+            # Validate the downloaded file is a valid .deb package
+            if dpkg-deb --info "$TMP_DEB" &>/dev/null; then
+                log "[Discord Updater] Installing update..."
+                if sudo /usr/bin/apt install -y "$TMP_DEB" 2>&1 | tee -a "$LOG_FILE"; then
+                    log "[Discord Updater] Successfully updated to $latest!"
+                else
+                    log "[Discord Updater] Installation failed. Launching existing version."
+                fi
             else
-                echo "[Discord Updater] Installation failed. Launching existing version."
+                log "[Discord Updater] Downloaded file is not a valid .deb package. Skipping install."
             fi
             rm -f "$TMP_DEB"
         else
-            echo "[Discord Updater] Download failed. Launching existing version."
+            log "[Discord Updater] Download failed. Launching existing version."
+            rm -f "$TMP_DEB"
         fi
     else
-        echo "[Discord Updater] Already up to date."
+        log "[Discord Updater] Already up to date."
     fi
 }
 
-# Run update check in background-ish but wait for it before launching
-update_discord
+# Use flock to prevent concurrent update attempts
+(
+    if flock -n 200; then
+        update_discord
+    else
+        log "[Discord Updater] Another update is already in progress. Skipping."
+    fi
+) 200>"$LOCK_FILE"
 
 # Launch Discord with any passed arguments
 exec "$DISCORD_BIN" "$@"
