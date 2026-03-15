@@ -8,15 +8,22 @@ TMP_DEB="/tmp/discord-update.deb"
 LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/discord-updater"
 LOG_FILE="$LOG_DIR/update.log"
 LOCK_FILE="/tmp/discord-updater.lock"
+NOTIFY_ICON="discord"
 
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
 
-# Log to both stdout and file (keep last 500 lines)
+# Log to both stdout and file
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "$msg"
     echo "$msg" >> "$LOG_FILE"
+}
+
+# Send desktop notification
+notify() {
+    local urgency="${2:-normal}"
+    notify-send -i "$NOTIFY_ICON" -a "Discord Updater" -u "$urgency" "Discord Updater" "$1" 2>/dev/null || true
 }
 
 # Rotate log if it gets too large (>100KB)
@@ -54,11 +61,13 @@ update_discord() {
 
     log "[Discord Updater] Installed version: $installed"
     log "[Discord Updater] Checking for updates..."
+    notify "Checking for updates..."
 
     latest=$(get_latest_version)
 
     if [ -z "$latest" ]; then
         log "[Discord Updater] Could not determine latest version. Skipping update."
+        notify "Could not check for updates. Launching anyway." "low"
         return
     fi
 
@@ -66,6 +75,7 @@ update_discord() {
 
     if version_lt "$installed" "$latest"; then
         log "[Discord Updater] Update available! Downloading $latest..."
+        notify "⬇️ Downloading Discord $latest..." "normal"
 
         # Clean up any leftover temp file
         rm -f "$TMP_DEB"
@@ -74,21 +84,27 @@ update_discord() {
             # Validate the downloaded file is a valid .deb package
             if dpkg-deb --info "$TMP_DEB" &>/dev/null; then
                 log "[Discord Updater] Installing update..."
+                notify "📦 Installing Discord $latest..."
                 if sudo /usr/bin/apt install -y "$TMP_DEB" 2>&1 | tee -a "$LOG_FILE"; then
                     log "[Discord Updater] Successfully updated to $latest!"
+                    notify "✅ Discord updated to $latest!" "normal"
                 else
                     log "[Discord Updater] Installation failed. Launching existing version."
+                    notify "⚠️ Update failed. Launching current version." "critical"
                 fi
             else
                 log "[Discord Updater] Downloaded file is not a valid .deb package. Skipping install."
+                notify "⚠️ Downloaded file invalid. Launching current version." "critical"
             fi
             rm -f "$TMP_DEB"
         else
             log "[Discord Updater] Download failed. Launching existing version."
+            notify "⚠️ Download failed. Launching current version." "critical"
             rm -f "$TMP_DEB"
         fi
     else
         log "[Discord Updater] Already up to date."
+        notify "✅ Discord is up to date ($installed)"
     fi
 }
 
