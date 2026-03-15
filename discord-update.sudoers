@@ -1,3 +1,4 @@
 # Allow the user to install Discord updates without a password prompt.
 # This rule is narrowly scoped to only the specific apt install command.
-%sudo ALL=(root) NOPASSWD: /usr/bin/apt install -y /tmp/discord-update.deb
+# Replace YOUR_USERNAME with your actual username, or use install.sh which does this automatically.
+YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/apt install -y /tmp/discord-update.deb

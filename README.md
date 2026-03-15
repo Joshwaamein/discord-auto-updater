@@ -13,8 +13,18 @@ A lightweight wrapper script that intercepts Discord's launch, checks for update
 ## How It Works
 
 1. **Version check**: On every launch, the wrapper queries your installed Discord version (`dpkg -s discord`) and compares it against the latest version available from Discord's download API.
-2. **Auto-download & install**: If a newer version exists, the `.deb` is downloaded to `/tmp` and installed via `apt install` using a passwordless sudoers rule.
+2. **Auto-download & install**: If a newer version exists, the `.deb` is downloaded to `/tmp`, validated, and installed via `apt install` using a passwordless sudoers rule.
 3. **Launch**: Discord launches normally after any update completes (or immediately if already up to date).
+
+## Features
+
+- **Automatic updates** — No more manual `.deb` downloads
+- **Network-safe** — Timeouts on all network calls so Discord still launches if offline
+- **Concurrency-safe** — File locking prevents races from double-clicks
+- **Download validation** — Verifies the `.deb` is valid before installing
+- **Logging** — All update activity logged to `~/.local/share/discord-updater/update.log`
+- **Log rotation** — Logs are automatically trimmed when they exceed 100KB
+- **Survives package updates** — Uses a user-local desktop entry that won't be overwritten
 
 ## Files
 
@@ -22,7 +32,7 @@ A lightweight wrapper script that intercepts Discord's launch, checks for update
 |------|---------|
 | `discord-update-launcher` | The wrapper script that checks for updates and launches Discord |
 | `discord.desktop` | User-local desktop entry that points to the wrapper script |
-| `discord-update.sudoers` | Sudoers rule for passwordless update installation |
+| `discord-update.sudoers` | Sudoers rule template for passwordless update installation |
 | `install.sh` | Automated installation script |
 | `uninstall.sh` | Automated uninstallation script |
 
@@ -31,9 +41,10 @@ A lightweight wrapper script that intercepts Discord's launch, checks for update
 ### Automatic
 
 ```bash
-chmod +x install.sh
 ./install.sh
 ```
+
+The installer will automatically request `sudo` if needed. It also works when run as `sudo ./install.sh` — it detects the real user via `$SUDO_USER`.
 
 ### Manual
 
@@ -43,9 +54,9 @@ chmod +x install.sh
    sudo chmod +x /usr/local/bin/discord-update-launcher
    ```
 
-2. **Install the sudoers rule** (allows passwordless update):
+2. **Install the sudoers rule** (allows passwordless update — replace `YOUR_USERNAME`):
    ```bash
-   sudo cp discord-update.sudoers /etc/sudoers.d/discord-update
+   echo "YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/apt install -y /tmp/discord-update.deb" | sudo tee /etc/sudoers.d/discord-update
    sudo chmod 440 /etc/sudoers.d/discord-update
    ```
 
@@ -61,7 +72,6 @@ chmod +x install.sh
 ### Automatic
 
 ```bash
-chmod +x uninstall.sh
 ./uninstall.sh
 ```
 
@@ -74,23 +84,34 @@ rm ~/.local/share/applications/discord.desktop
 update-desktop-database ~/.local/share/applications
 ```
 
+## Logging
+
+Update activity is logged to `~/.local/share/discord-updater/update.log`. Check this file if something isn't working:
+
+```bash
+cat ~/.local/share/discord-updater/update.log
+```
+
+Logs are automatically rotated when they exceed 100KB.
+
 ## Security
 
 - The sudoers rule is **narrowly scoped** — it only allows running `apt install -y /tmp/discord-update.deb` as root, nothing else.
 - No passwords are stored anywhere.
 - The download URL is Discord's official API endpoint.
+- Downloaded `.deb` files are **validated** with `dpkg-deb --info` before installation.
 - The user-local desktop entry takes priority over the system one, so the system entry is left untouched for the package manager to manage.
 
 ## Requirements
 
 - Debian/Ubuntu-based Linux distribution
 - Discord installed via `.deb` package
-- `curl`, `apt`, `dpkg` (standard on Debian/Ubuntu)
+- `curl`, `apt`, `dpkg`, `flock` (standard on Debian/Ubuntu)
 - `sudo` access (only needed during installation)
 
 ## How the Version Check Works
 
-The script follows Discord's download redirect URL (`https://discord.com/api/download?platform=linux&format=deb`) which resolves to a URL containing the version number (e.g., `discord-0.0.128.deb`). It extracts this version and compares it against the locally installed version using `sort -V`.
+The script follows Discord's download redirect URL (`https://discord.com/api/download?platform=linux&format=deb`) which resolves to a URL containing the version number (e.g., `discord-0.0.128.deb`). It extracts this version and compares it against the locally installed version using `sort -V`. The check uses a 5-second connect timeout and 10-second max time, so Discord still launches quickly even if the network is unavailable.
 
 ## License
 
