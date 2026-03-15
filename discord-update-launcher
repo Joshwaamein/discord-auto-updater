@@ -1,0 +1,72 @@
+#!/bin/bash
+# Discord Auto-Update Launcher
+# Checks for Discord updates before launching, installs if available.
+
+DISCORD_BIN="/usr/share/discord/Discord"
+DOWNLOAD_URL="https://discord.com/api/download?platform=linux&format=deb"
+TMP_DEB="/tmp/discord-update.deb"
+
+# Get installed version
+get_installed_version() {
+    dpkg -s discord 2>/dev/null | grep '^Version:' | awk '{print $2}'
+}
+
+# Get latest version by following the redirect (non-destructive HEAD-like check)
+get_latest_version() {
+    # Follow redirects and extract version from the final URL
+    local final_url
+    final_url=$(curl -sI -o /dev/null -w '%{url_effective}' -L "$DOWNLOAD_URL" 2>/dev/null)
+    echo "$final_url" | grep -oP 'discord-\K[0-9]+\.[0-9]+\.[0-9]+'
+}
+
+# Compare versions: returns 0 if $1 < $2
+version_lt() {
+    [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ] && [ "$1" != "$2" ]
+}
+
+# Main update check
+update_discord() {
+    local installed latest
+    installed=$(get_installed_version)
+
+    if [ -z "$installed" ]; then
+        echo "[Discord Updater] Discord is not installed via dpkg. Skipping update check."
+        return
+    fi
+
+    echo "[Discord Updater] Installed version: $installed"
+    echo "[Discord Updater] Checking for updates..."
+
+    latest=$(get_latest_version)
+
+    if [ -z "$latest" ]; then
+        echo "[Discord Updater] Could not determine latest version. Skipping update."
+        return
+    fi
+
+    echo "[Discord Updater] Latest version: $latest"
+
+    if version_lt "$installed" "$latest"; then
+        echo "[Discord Updater] Update available! Downloading $latest..."
+
+        if curl -L -o "$TMP_DEB" "$DOWNLOAD_URL" 2>/dev/null; then
+            echo "[Discord Updater] Installing update..."
+            if sudo /usr/bin/apt install -y "$TMP_DEB" 2>&1; then
+                echo "[Discord Updater] Successfully updated to $latest!"
+            else
+                echo "[Discord Updater] Installation failed. Launching existing version."
+            fi
+            rm -f "$TMP_DEB"
+        else
+            echo "[Discord Updater] Download failed. Launching existing version."
+        fi
+    else
+        echo "[Discord Updater] Already up to date."
+    fi
+}
+
+# Run update check in background-ish but wait for it before launching
+update_discord
+
+# Launch Discord with any passed arguments
+exec "$DISCORD_BIN" "$@"
